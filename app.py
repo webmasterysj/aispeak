@@ -25,8 +25,7 @@ SYSTEM_PROMPT = (
 )
 WELCOME_MESSAGE = "안녕하세요! 오늘도 무엇이든 편하게 물어보세요."
 MISSING_KEY_MESSAGE = (
-    "서비스 설정이 아직 완료되지 않았어요. 관리자에게 Streamlit Secrets의 "
-    "`GROQ_API_KEY` 설정을 요청해 주세요."
+    "먼저 위의 Groq API 키 입력란에 API 키를 입력해 주세요."
 )
 SUGGESTIONS = (
     "오늘 하루를 알차게 보내는 방법을 알려줘.",
@@ -46,8 +45,12 @@ def _read_api_key() -> str:
     try:
         value = st.secrets.get("GROQ_API_KEY", "")
     except StreamlitSecretNotFoundError:
-        return ""
-    return value.strip() if isinstance(value, str) else ""
+        value = ""
+    secret_key = value.strip() if isinstance(value, str) else ""
+    if secret_key:
+        return secret_key
+    session_key = st.session_state.get("api_key_input", "")
+    return session_key.strip() if isinstance(session_key, str) else ""
 
 
 def _request_answer(api_key: str, messages: list[dict[str, str]]) -> str:
@@ -59,7 +62,7 @@ def _request_answer(api_key: str, messages: list[dict[str, str]]) -> str:
         )
     except AuthenticationError:
         raise RequestFailure(
-            "AI 서비스 인증에 실패했어요. 관리자에게 API 키 설정을 확인해 달라고 요청해 주세요."
+            "Groq API 키가 올바른지 확인해 주세요."
         ) from None
     except PermissionDeniedError:
         raise RequestFailure(
@@ -393,6 +396,16 @@ st.session_state.setdefault("last_error", "")
 
 st.title("AI 스피커")
 st.caption("편하게 질문해 보세요. 대화는 현재 브라우저 세션에서만 유지됩니다.")
+
+with st.expander("Groq API 키 입력", expanded=True):
+    st.text_input(
+        "Groq API 키",
+        type="password",
+        key="api_key_input",
+        placeholder="gsk_로 시작하는 API 키 입력",
+        help="입력한 키는 현재 앱 세션에서만 사용됩니다. 신뢰하는 앱에서만 입력하고, 코드에 직접 넣거나 공유하지 마세요.",
+    )
+    st.caption("키는 입력란에서 마스킹되며 대화에 표시되지 않습니다. 공용 또는 타인의 서버에서는 입력하지 마세요.")
 
 with st.container(horizontal=True, vertical_alignment="center"):
     st.toggle("음성 답변 켜기", key="voice_enabled")
