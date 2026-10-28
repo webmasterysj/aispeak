@@ -21,6 +21,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 MODEL_ID = "openai/gpt-oss-120b"
 SYSTEM_PROMPT = (
     "당신은 한국어로 친절하고 명확하게 답하는 일상 대화형 AI 비서입니다. "
+    "모든 답변은 핵심만 담아 1~3문장 이내로 짧고 간결하게 답변하세요. "
     "확인할 수 없는 실시간 정보는 사실처럼 단정하지 말고, 필요한 경우 한계를 밝히세요."
 )
 WELCOME_MESSAGE = "안녕하세요! 오늘도 무엇이든 편하게 물어보세요."
@@ -173,43 +174,261 @@ def _reset_conversation() -> None:
     st.session_state["active_request_id"] = ""
 
 
+_PAGE_STYLE = """
+<style>
+.stMainBlockContainer {
+  max-width: 44rem;
+  padding-top: 2rem;
+  padding-bottom: 3rem;
+}
+h1 {
+  text-align: center;
+  font-weight: 800 !important;
+  letter-spacing: -0.03em !important;
+  margin-bottom: 0.15rem !important;
+}
+.stMainBlockContainer > div > div > div > .stCaptionContainer {
+  text-align: center;
+}
+[data-testid="stExpander"] {
+  border-radius: 1rem !important;
+  border: 1px solid rgba(148, 163, 184, 0.25) !important;
+  background: var(--st-secondary-background-color);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+  overflow: hidden;
+}
+[data-testid="stChatMessage"] {
+  border-radius: 1.15rem;
+  padding: 0.85rem 1.1rem;
+  margin-bottom: 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+[data-testid="stBaseButton-secondary"] {
+  border-radius: 0.9rem !important;
+  border: 1px solid rgba(148, 163, 184, 0.28) !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease !important;
+}
+[data-testid="stBaseButton-secondary"]:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+}
+</style>
+"""
+
+
 _VOICE_COMPONENT = st.components.v2.component(
     name="daily_speaker_voice_controls",
     html="""
-<div class="voice-controls" role="group" aria-label="음성 컨트롤">
-  <button id="listen-start" type="button">음성 입력 시작</button>
-  <button id="listen-stop" type="button">음성 입력 종료</button>
-  <button id="speak-again" type="button">답변 다시 듣기</button>
-  <button id="speak-stop" type="button">답변 재생 중지</button>
-  <p id="voice-status" role="status" aria-live="polite"></p>
+<div class="voice-controls" role="group" aria-label="음성 컨트롤" data-state="idle">
+  <div class="speaker-stage">
+    <span class="speaker-badge">SMART VOICE ASSISTANT</span>
+    <div class="orb-wrapper">
+      <button id="listen-start" class="orb-button" type="button" aria-label="음성 입력 시작">
+        <svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
+        </svg>
+        <span class="orb-label">음성 입력 시작</span>
+      </button>
+    </div>
+    <p id="voice-transcript" class="voice-transcript" aria-live="polite"></p>
+    <p id="voice-status" role="status" aria-live="polite"></p>
+  </div>
+  <div class="sub-controls">
+    <button id="listen-stop" type="button">음성 입력 종료</button>
+    <button id="speak-again" type="button">답변 다시 듣기</button>
+    <button id="speak-stop" type="button">답변 재생 중지</button>
+  </div>
 </div>
 """,
     css="""
 .voice-controls {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 1.75rem 1.35rem 1.35rem;
+  border-radius: 1.65rem;
+  background: radial-gradient(circle at 50% 22%, rgba(99, 102, 241, 0.22), transparent 60%),
+              linear-gradient(145deg, #0b1120 0%, #1e293b 55%, #0f172a 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 20px 44px rgba(15, 23, 42, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  color: #f8fafc;
+  font-family: var(--st-font, system-ui, -apple-system, sans-serif);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+  text-align: center;
+}
+.speaker-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+}
+.speaker-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #94a3b8;
+  padding: 0.25rem 0.7rem;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.orb-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem;
+}
+.orb-wrapper::before {
+  content: "";
+  position: absolute;
+  width: 9.6rem;
+  height: 9.6rem;
+  border-radius: 50%;
+  border: 1px solid rgba(129, 140, 248, 0.28);
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.18) 0%, transparent 70%);
+  pointer-events: none;
+  transition: transform 0.3s ease, border-color 0.3s ease;
+}
+.orb-button {
+  position: relative;
+  z-index: 2;
+  width: 8.25rem;
+  height: 8.25rem;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.32);
+  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 52%, #8b5cf6 100%);
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  box-shadow: 0 12px 32px rgba(99, 102, 241, 0.48), inset 0 2px 8px rgba(255, 255, 255, 0.38);
+  transition: transform 0.22s ease, box-shadow 0.22s ease, background 0.3s ease;
+  padding: 0.65rem;
+}
+.orb-button:hover:not(:disabled) {
+  transform: translateY(-2px) scale(1.03);
+  box-shadow: 0 16px 38px rgba(99, 102, 241, 0.62), inset 0 2px 10px rgba(255, 255, 255, 0.48);
+}
+.orb-button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.orb-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+  box-shadow: none;
+}
+.mic-icon {
+  width: 2.25rem;
+  height: 2.25rem;
+  fill: currentColor;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 4px rgba(15, 23, 42, 0.25));
+}
+.orb-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  word-break: keep-all;
+}
+.voice-controls[data-state="listening"] .orb-wrapper::before {
+  border-color: rgba(244, 63, 94, 0.55);
+  background: radial-gradient(circle, rgba(236, 72, 153, 0.28) 0%, transparent 72%);
+  animation: ring-ripple 1.4s infinite ease-out;
+}
+.voice-controls[data-state="listening"] .orb-button {
+  background: linear-gradient(135deg, #ef4444 0%, #ec4899 52%, #8b5cf6 100%);
+  box-shadow: 0 0 36px rgba(236, 72, 153, 0.68), inset 0 2px 8px rgba(255, 255, 255, 0.42);
+  animation: orb-pulse 1.4s infinite ease-in-out;
+}
+.voice-controls[data-state="speaking"] .orb-wrapper::before {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: radial-gradient(circle, rgba(16, 185, 129, 0.22) 0%, transparent 72%);
+}
+.voice-controls[data-state="speaking"] .orb-button {
+  background: linear-gradient(135deg, #10b981 0%, #06b6d4 52%, #3b82f6 100%);
+  box-shadow: 0 0 32px rgba(16, 185, 129, 0.58), inset 0 2px 8px rgba(255, 255, 255, 0.42);
+}
+@keyframes orb-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+@keyframes ring-ripple {
+  0% { transform: scale(0.92); opacity: 0.9; }
+  100% { transform: scale(1.16); opacity: 0.15; }
+}
+.voice-transcript {
+  margin: 0;
+  min-height: 1.35rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  max-width: 92%;
+  overflow-wrap: anywhere;
+}
+#voice-status {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  line-height: 1.45;
+  max-width: 95%;
+}
+.sub-controls {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   align-items: center;
   gap: 0.5rem;
-  color: var(--st-text-color);
-  font-family: var(--st-font);
+  width: 100%;
+  padding-top: 0.55rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
-.voice-controls button {
-  min-height: 2.75rem;
-  padding: 0.5rem 0.8rem;
-  border: 1px solid var(--st-border-color);
-  border-radius: var(--st-border-radius);
-  background: var(--st-secondary-background-color);
-  color: var(--st-text-color);
+.sub-controls button {
+  min-height: 2.5rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+  font-size: 0.82rem;
+  font-weight: 500;
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
-.voice-controls button:disabled {
+.sub-controls button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.32);
+  transform: translateY(-1px);
+}
+.sub-controls button:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.42;
 }
-.voice-controls p {
-  flex-basis: 100%;
-  margin: 0;
-  font-size: 0.875rem;
+@media (max-width: 420px) {
+  .voice-controls {
+    padding: 1.25rem 0.85rem 1rem;
+    border-radius: 1.3rem;
+  }
+  .orb-wrapper::before {
+    width: 8rem;
+    height: 8rem;
+  }
+  .orb-button {
+    width: 6.85rem;
+    height: 6.85rem;
+  }
+  .sub-controls button {
+    font-size: 0.78rem;
+    padding: 0.4rem 0.72rem;
+  }
 }
 """,
     js="""
@@ -218,13 +437,20 @@ export default function (component) {
   const root = parentElement.querySelector(".voice-controls");
   if (!root) return;
 
+  const SILENCE_DELAY_MS = 1400;
   const startButton = root.querySelector("#listen-start");
+  const orbLabel = root.querySelector(".orb-label");
   const stopButton = root.querySelector("#listen-stop");
   const replayButton = root.querySelector("#speak-again");
   const cancelButton = root.querySelector("#speak-stop");
+  const transcriptEl = root.querySelector("#voice-transcript");
   const status = root.querySelector("#voice-status");
   const state = root.__speakerState || (root.__speakerState = {
     recognition: null,
+    silenceTimer: null,
+    collectedText: "",
+    hasSubmitted: false,
+    manualStop: false,
     lastSpeechId: "",
     stopId: data.stopSpeechId,
     voiceEnabled: data.voiceEnabled,
@@ -237,10 +463,79 @@ export default function (component) {
     status.textContent = message;
   }
 
+  function setTranscript(text) {
+    if (transcriptEl) transcriptEl.textContent = text;
+  }
+
+  function updateVisualState() {
+    if (state.recognition) {
+      root.setAttribute("data-state", "listening");
+      if (orbLabel) orbLabel.textContent = "듣고 있어요...";
+    } else if (state.utterance) {
+      root.setAttribute("data-state", "speaking");
+      if (orbLabel) orbLabel.textContent = "음성 입력 시작";
+    } else {
+      root.setAttribute("data-state", "idle");
+      if (orbLabel) orbLabel.textContent = "음성 입력 시작";
+    }
+    startButton.disabled = !Recognition || Boolean(state.recognition);
+    stopButton.disabled = !state.recognition;
+    replayButton.disabled = !synthesis || !data.speechText || !data.voiceEnabled;
+    cancelButton.disabled = !state.utterance;
+  }
+
+  function clearSilenceTimer() {
+    if (state.silenceTimer) {
+      clearTimeout(state.silenceTimer);
+      state.silenceTimer = null;
+    }
+  }
+
+  function finishListening({ shouldSubmit, emptyMessage }) {
+    clearSilenceTimer();
+    const activeRecognition = state.recognition;
+    state.recognition = null;
+    if (activeRecognition) {
+      try {
+        activeRecognition.stop();
+      } catch (_) {}
+    }
+    updateVisualState();
+
+    if (!shouldSubmit || state.hasSubmitted) return;
+    const finalTranscript = (state.collectedText || "").trim();
+    if (!finalTranscript) {
+      setTranscript("");
+      setStatus(
+        emptyMessage ||
+          "1.4초 동안 음성이 들리지 않아 음성 인식을 종료했어요. 중앙 버튼을 눌러 다시 말씀해 주세요."
+      );
+      return;
+    }
+    state.hasSubmitted = true;
+    setStatus("음성을 인식했어요. 답변을 준비할게요.");
+    setTriggerValue("recognized", {
+      id: `${Date.now()}-${Math.random()}`,
+      text: finalTranscript
+    });
+  }
+
+  function resetSilenceTimer() {
+    clearSilenceTimer();
+    state.silenceTimer = setTimeout(() => {
+      if (!state.recognition) return;
+      finishListening({
+        shouldSubmit: true,
+        emptyMessage:
+          "1.4초 동안 음성이 들리지 않아 음성 인식을 종료했어요. 중앙 버튼을 눌러 다시 말씀해 주세요."
+      });
+    }, SILENCE_DELAY_MS);
+  }
+
   function cancelSpeech(message) {
     state.utterance = null;
     if (synthesis) synthesis.cancel();
-    cancelButton.disabled = true;
+    updateVisualState();
     if (message) setStatus(message);
   }
 
@@ -258,33 +553,28 @@ export default function (component) {
     utterance.lang = "ko-KR";
     utterance.onstart = () => {
       if (state.utterance !== utterance) return;
-      cancelButton.disabled = false;
+      updateVisualState();
       setStatus("답변을 읽고 있어요.");
     };
     utterance.onend = () => {
       if (state.utterance !== utterance) return;
       state.utterance = null;
-      cancelButton.disabled = true;
+      updateVisualState();
       setStatus("답변 읽기가 끝났어요.");
     };
     utterance.onerror = (event) => {
       if (state.utterance !== utterance) return;
       state.utterance = null;
-      cancelButton.disabled = true;
+      updateVisualState();
       setStatus(event.error === "canceled" || event.error === "interrupted"
         ? "답변 읽기를 중지했어요."
         : "자동 재생에 실패했어요. 다시 듣기 버튼을 눌러 보세요.");
     };
     state.utterance = utterance;
-    cancelButton.disabled = false;
+    updateVisualState();
     setStatus("답변을 자동으로 읽으려고 해요. 재생되지 않으면 다시 듣기를 눌러 주세요.");
     synthesis.speak(utterance);
   }
-
-  startButton.disabled = !Recognition;
-  stopButton.disabled = !state.recognition;
-  replayButton.disabled = !synthesis || !data.speechText || !data.voiceEnabled;
-  cancelButton.disabled = !state.utterance;
 
   if (state.stopId !== data.stopSpeechId) {
     state.stopId = data.stopSpeechId;
@@ -294,13 +584,14 @@ export default function (component) {
     cancelSpeech("음성 답변이 꺼졌어요.");
   }
   state.voiceEnabled = data.voiceEnabled;
+  updateVisualState();
 
   if (!Recognition && !status.textContent) {
     setStatus("이 브라우저는 음성 입력을 지원하지 않아요. 텍스트 입력을 이용해 주세요.");
   } else if (!synthesis && !status.textContent) {
     setStatus("이 환경은 음성 읽기를 지원하지 않아요. 답변은 텍스트로 확인해 주세요.");
   } else if (!status.textContent) {
-    setStatus("음성 입력은 버튼을 눌렀을 때 시작돼요. 마이크 권한이 필요합니다.");
+    setStatus("중앙의 둥근 버튼을 누르면 음성 입력이 시작돼요. 1.4초 동안 말이 멈추면 자동으로 전송됩니다.");
   }
 
   startButton.onclick = () => {
@@ -309,29 +600,41 @@ export default function (component) {
       return;
     }
     if (state.recognition) return;
+    cancelSpeech("");
+
     const recognition = new Recognition();
     state.recognition = recognition;
+    state.collectedText = "";
+    state.hasSubmitted = false;
+    state.manualStop = false;
+    setTranscript("");
+
     recognition.lang = "ko-KR";
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.onstart = () => {
+      if (state.recognition !== recognition) return;
+      resetSilenceTimer();
+    };
+    recognition.onspeechstart = () => {
+      if (state.recognition !== recognition) return;
+      resetSilenceTimer();
+    };
     recognition.onresult = (event) => {
+      if (state.hasSubmitted || state.manualStop) return;
       const transcript = Array.from(event.results)
         .map((result) => result[0].transcript)
         .join("")
         .trim();
-      if (!transcript) {
-        setStatus("음성을 알아듣지 못했어요. 다시 시도하거나 텍스트로 입력해 주세요.");
-        return;
-      }
-      setStatus("음성을 인식했어요. 답변을 준비할게요.");
-      setTriggerValue("recognized", {
-        id: `${Date.now()}-${Math.random()}`,
-        text: transcript
-      });
+      state.collectedText = transcript;
+      setTranscript(transcript ? `"${transcript}"` : "");
+      resetSilenceTimer();
     };
     recognition.onerror = (event) => {
+      clearSilenceTimer();
       state.recognition = null;
-      stopButton.disabled = true;
+      state.manualStop = true;
+      updateVisualState();
       setStatus(event.error === "not-allowed" || event.error === "service-not-allowed"
         ? "마이크 권한이 없어 음성 입력을 시작할 수 없어요. 권한을 허용하거나 텍스트로 입력해 주세요."
         : event.error === "audio-capture"
@@ -343,16 +646,26 @@ export default function (component) {
           : "음성 입력 중 문제가 생겼어요. 다시 시도하거나 텍스트로 입력해 주세요.");
     };
     recognition.onend = () => {
+      clearSilenceTimer();
       state.recognition = null;
-      stopButton.disabled = true;
+      updateVisualState();
+      if (!state.manualStop && !state.hasSubmitted) {
+        if ((state.collectedText || "").trim()) {
+          finishListening({ shouldSubmit: true });
+        } else {
+          setStatus("음성을 알아듣지 못했어요. 다시 시도하거나 텍스트로 입력해 주세요.");
+        }
+      }
     };
     try {
       recognition.start();
-      stopButton.disabled = false;
-      setStatus("듣고 있어요. 말씀하신 뒤 입력이 끝나면 자동으로 전송됩니다.");
+      updateVisualState();
+      setStatus("듣고 있어요. 1.4초 동안 음성이 들리지 않으면 자동으로 인식을 종료하고 전송합니다.");
+      resetSilenceTimer();
     } catch (error) {
+      clearSilenceTimer();
       state.recognition = null;
-      stopButton.disabled = true;
+      updateVisualState();
       setStatus(error.name === "NotAllowedError"
         ? "마이크 권한이 없어 음성 입력을 시작할 수 없어요. 권한을 허용하거나 텍스트로 입력해 주세요."
         : "음성 입력을 시작하지 못했어요. 텍스트 입력을 이용해 주세요.");
@@ -360,11 +673,15 @@ export default function (component) {
   };
 
   stopButton.onclick = () => {
+    state.manualStop = true;
+    clearSilenceTimer();
     if (state.recognition) {
-      state.recognition.stop();
+      try {
+        state.recognition.stop();
+      } catch (_) {}
       state.recognition = null;
     }
-    stopButton.disabled = true;
+    updateVisualState();
     setStatus("음성 입력을 종료했어요.");
   };
   replayButton.onclick = speakAnswer;
@@ -372,11 +689,17 @@ export default function (component) {
 
   if (data.speechId && state.lastSpeechId !== data.speechId) {
     state.lastSpeechId = data.speechId;
+    setTranscript("");
     if (data.voiceEnabled) speakAnswer();
   }
 
   return () => {
-    if (state.recognition) state.recognition.stop();
+    clearSilenceTimer();
+    if (state.recognition) {
+      try {
+        state.recognition.stop();
+      } catch (_) {}
+    }
     if (synthesis) synthesis.cancel();
   };
 }
@@ -385,6 +708,7 @@ export default function (component) {
 
 
 st.set_page_config(page_title="AI 스피커", page_icon=":material/graphic_eq:", layout="centered")
+st.html(_PAGE_STYLE)
 st.session_state.setdefault("messages", [])
 st.session_state.setdefault("voice_enabled", True)
 st.session_state.setdefault("speech_id", "")
